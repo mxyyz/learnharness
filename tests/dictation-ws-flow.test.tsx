@@ -257,6 +257,26 @@ test("abnormal close reconnects once with a fresh connect, then a second drop en
 	assert.match(f.dictation.error ?? "", /STT connection lost \(1006\)/);
 });
 
+test("stop is terminal: finals after stop buffer, and a close during stopping finalizes without reconnecting", async () => {
+	unregisterBackend = registerSttBackend("test-plugin", fakeBackend());
+	const f = await fixture(wsRecord({}));
+	await f.mount();
+	await act(async () => { f.dictation.toggle(); });
+	const socket = Socket.all[0]!;
+	await act(async () => { socket.open(); socket.partial("live words"); });
+	assert.equal(f.dictation.phase, "recording");
+	await act(async () => { f.dictation.stop(); });
+	assert.equal(f.dictation.phase, "stopping", "waiting state held after stop, not just until audio is sent");
+	assert.deepEqual(socket.sent.at(-1), JSON.stringify({ type: "stop" }));
+	await act(async () => { socket.final("late final"); });
+	assert.equal(f.dictation.phase, "stopping", "still waiting for the server to end the session");
+	assert.deepEqual(f.state.appends, [], "nothing renders while stopping");
+	await act(async () => { socket.end(1006); }); // abnormal close DURING stopping
+	assert.equal(f.dictation.phase, "idle");
+	assert.deepEqual(f.state.appends, ["late final"], "buffered final flushed once at finalize");
+	assert.equal(Socket.all.length, 1, "a run that is stopping is never reconnected, whatever the close code");
+});
+
 test("a throwing adapter (encodeAudio) becomes a terminal error, never a crash", async () => {
 	unregisterBackend = registerSttBackend("test-plugin", fakeBackend("test-stt", { encode: () => { throw new Error("bad frame"); } }));
 	const f = await fixture(wsRecord({}));

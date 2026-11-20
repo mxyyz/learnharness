@@ -1051,17 +1051,17 @@ function CustomEndpointEditor({
 }
 
 /** The Dictation group's setup hint, provider-aware: Deepgram needs a key;
- * a self-hosted ws backend needs its plugin enabled and a stream URL. */
+ * the ws provider needs a plugin-registered backend plus its stream URL. */
 function DictationSetupHint() {
 	const { section } = useDictationLanguage();
 	const provider = section?.provider ?? "deepgram";
 	if (provider === "ws") {
 		return (
 			<p data-testid="dictation-setup-hint" className="px-1 text-[11px] leading-relaxed text-muted-foreground/70">
-				Self-hosted dictation uses a streaming WebSocket backend registered by a plugin — pick the backend
-				and add its <span className="font-medium">wss://</span> stream URL above. The desktop app must trust
-				the server's certificate (install the homelab CA in the system store). No API key is needed for a
-				keyless local server.
+				Plugin dictation uses a streaming WebSocket backend registered by a plugin — pick the backend and
+				add its <span className="font-medium">wss://</span> stream URL above. The renderer connects directly
+				to that URL, so the desktop app must trust the server's certificate (for a private CA, install it in
+				the system store). No API key is needed unless the backend's plugin adds one (via URL or subprotocol).
 			</p>
 		);
 	}

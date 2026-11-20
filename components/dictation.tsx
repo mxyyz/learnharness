@@ -517,6 +517,12 @@ export function useDictation({ append, destination = "primary", disabled = false
 
 			ws.addEventListener("open", () => {
 				if (gen !== genRef.current) return;
+				if (phaseRef.current === "stopping") {
+					// A reconnect that completes after stop() must not resume
+					// recording: close it, and the close handler finalizes.
+					try { ws.close(); } catch {}
+					return;
+				}
 				if (plan.kind === "ws") {
 					try {
 						for (const frame of plan.conn.startFrames ?? []) ws.send(frame as string | ArrayBufferLike);
@@ -575,9 +581,11 @@ export function useDictation({ append, destination = "primary", disabled = false
 			});
 			ws.addEventListener("close", (ev) => {
 				if (gen !== genRef.current) return;
-				if (ev.code === 1000) {
-					// Our own stop landing: finalize now — the stop path's
-					// safety net stays as the no-close backstop only.
+				if (ev.code === 1000 || phaseRef.current === "stopping") {
+					// Our own stop landing — or ANY close while stopping (a
+					// run that is ending is never reconnected, whatever the
+					// close code): finalize now. The stop path's safety net
+					// stays as the no-close backstop only.
 					cleanup();
 					return;
 				}

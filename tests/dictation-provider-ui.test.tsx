@@ -104,7 +104,9 @@ afterEach(async () => {
 test("default provider is deepgram and the ws-only rows are hidden", async () => {
 	const f = await fixture({ version: 1, dictation: { language: "en" } });
 	await f.mount();
-	assert.equal((byTest("dictation-provider") as unknown as HTMLSelectElement).value, "deepgram");
+	const providerSelect = byTest("dictation-provider") as unknown as HTMLSelectElement;
+	assert.equal(providerSelect.value, "deepgram");
+	assert.deepEqual([...providerSelect.options].map((o) => o.textContent), ["Deepgram (cloud)", "Plugin (websocket)"]);
 	assert.equal(document.querySelector('[data-testid="row-dictation-backend"]'), null);
 	assert.equal(document.querySelector('[data-testid="row-dictation-stream-url"]'), null);
 	assert.equal(document.querySelector('[data-testid="row-dictation-stream-model"]'), null);
@@ -121,9 +123,14 @@ test("switching to ws persists the merged section and reveals backend/url/model 
 	assert.ok(byTest("row-dictation-stream-model"));
 	const backendSelect = byTest("dictation-backend") as unknown as HTMLSelectElement;
 	assert.deepEqual([...backendSelect.options].map((o) => o.value), ["", "transcribe-server"]);
+	assert.equal(backendSelect.options[1]!.textContent, "Fake transcribe-server (transcribe-server)", "label + id shown when they differ");
+	assert.equal((byTest("dictation-stream-url") as unknown as HTMLInputElement).placeholder, "wss://stt.example.com/v1/audio/stream", "generic placeholder, not a homelab default");
 	// live registry update: a backend registered after render appears without reload
 	await act(async () => { unregisterBackend!(); unregisterBackend = registerSttBackend("test-plugin", fakeBackend("second-stt")); });
 	assert.deepEqual([...backendSelect.options].map((o) => o.value), ["", "second-stt"]);
+	// a backend whose label IS its id renders the name once, not duplicated
+	await act(async () => { unregisterBackend!(); unregisterBackend = registerSttBackend("test-plugin", { ...fakeBackend("plain-stt"), label: "plain-stt" }); });
+	assert.equal(backendSelect.options[1]!.textContent, "plain-stt");
 });
 
 test("stored backend without a live registration is shown as missing, and choosing it persists", async () => {

@@ -10,7 +10,7 @@ import { getSttBackendsSnapshot, subscribeSttBackends } from "@/components/dicta
 
 const PROVIDER_LABELS: Record<DictationProvider, string> = {
 	deepgram: "Deepgram (cloud)",
-	ws: "Self-hosted (WebSocket)",
+	ws: "Plugin (websocket)",
 };
 
 /**
@@ -58,7 +58,7 @@ export function DictationProviderSetting() {
 					{backend === "" && <option value="">— choose —</option>}
 					{backends.map((registration) => (
 						<option key={registration.backend.id} value={registration.backend.id}>
-							{registration.backend.label} ({registration.backend.id})
+							{registration.backend.label === registration.backend.id ? registration.backend.id : `${registration.backend.label} (${registration.backend.id})`}
 						</option>
 					))}
 					{backend !== "" && !backends.some((registration) => registration.backend.id === backend) && (
@@ -69,7 +69,7 @@ export function DictationProviderSetting() {
 			<SettingsRow label="Stream URL" testid="row-dictation-stream-url" dimmed={active}>
 				<CommitInput
 					value={url}
-					placeholder="wss://stt.homelab.internal/v1/audio/stream"
+					placeholder="wss://stt.example.com/v1/audio/stream"
 					ariaLabel="Dictation stream URL"
 					testid="dictation-stream-url"
 					disabled={disabled}
