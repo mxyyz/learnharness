@@ -35,7 +35,6 @@ import {
 	type BackgroundModelRole,
 	type FactorySettings,
 	type GeneralSettings,
-	type DictationSettings,
 	type CompactionSettings,
 	type CustomModel,
 	type CustomModelOverride,
@@ -43,6 +42,8 @@ import {
 	type ModelSlot,
 	type ModelSlotName,
 	type RoleModelOverride,
+	type DictationLanguage,
+	type DictationProvider,
 	type UserSettings,
 } from "./settings.ts";
 
@@ -71,9 +72,17 @@ export interface EffectiveModelSpec {
 export type EffectiveAppearance = FactorySettings["appearance"];
 
 /** The concrete view: every knob resolved, no absent fields. */
+/** The concrete dictation view: provider resolved, backend/stream nullable. */
+export interface EffectiveDictation {
+	language: DictationLanguage;
+	provider: DictationProvider;
+	backend: string | null;
+	stream: { url: string | null; model: string | null };
+}
+
 export interface EffectiveSettings {
 	general: Required<GeneralSettings>;
-	dictation: Required<DictationSettings>;
+	dictation: EffectiveDictation;
 	agent: {
 		workerRequestConcurrency: number;
 		models: Record<BackgroundModelRole, EffectiveModelSpec | undefined>;
@@ -200,6 +209,12 @@ export function resolveSettings(record: UserSettings | null): EffectiveSettings 
 		},
 		dictation: {
 			language: record?.dictation?.language ?? FACTORY_SETTINGS.dictation.language,
+			provider: record?.dictation?.provider ?? FACTORY_SETTINGS.dictation.provider,
+			backend: record?.dictation?.backend ?? null,
+			stream: {
+				url: record?.dictation?.stream?.url ?? null,
+				model: record?.dictation?.stream?.model ?? null,
+			},
 		},
 		agent: {
 			workerRequestConcurrency: agent.workerRequestConcurrency ?? FACTORY_SETTINGS.agent.workerRequestConcurrency,

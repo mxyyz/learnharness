@@ -43,6 +43,8 @@ import { isInteractionScopeEligible } from "@/components/plugin-input-focus";
 import { MenuShell } from "@/components/menu-shell";
 import { notifySettingsSaved } from "@/components/settings-signal";
 import { DictationLanguageSetting } from "@/components/dictation-language";
+import { DictationProviderSetting } from "@/components/dictation-provider";
+import { useDictationLanguage } from "@/components/dictation-preference";
 
 /** One pi-ai provider with plain API-key auth (the Platform seam —
  *  derived from pi-ai's own env-key table; no drift possible). */
@@ -601,14 +603,8 @@ export function KeysSection({
 				))}
 				{label === "Dictation" && <>
 					<DictationLanguageSetting />
-					<p data-testid="dictation-setup-hint" className="px-1 text-[11px] leading-relaxed text-muted-foreground/70">
-						Create a <a
-							href="https://console.deepgram.com/"
-							target="_blank"
-							rel="noreferrer"
-							className="underline underline-offset-2 hover:text-foreground"
-						>Deepgram API key</a> with the Member role or higher, then add it above.
-					</p>
+					<DictationProviderSetting />
+					<DictationSetupHint />
 				</>}
 			</SettingsGroup>)}
 
@@ -1051,5 +1047,32 @@ function CustomEndpointEditor({
 				</p>
 			)}
 		</div>
+	);
+}
+
+/** The Dictation group's setup hint, provider-aware: Deepgram needs a key;
+ * a self-hosted ws backend needs its plugin enabled and a stream URL. */
+function DictationSetupHint() {
+	const { section } = useDictationLanguage();
+	const provider = section?.provider ?? "deepgram";
+	if (provider === "ws") {
+		return (
+			<p data-testid="dictation-setup-hint" className="px-1 text-[11px] leading-relaxed text-muted-foreground/70">
+				Self-hosted dictation uses a streaming WebSocket backend registered by a plugin — pick the backend
+				and add its <span className="font-medium">wss://</span> stream URL above. The desktop app must trust
+				the server's certificate (install the homelab CA in the system store). No API key is needed for a
+				keyless local server.
+			</p>
+		);
+	}
+	return (
+		<p data-testid="dictation-setup-hint" className="px-1 text-[11px] leading-relaxed text-muted-foreground/70">
+			Create a <a
+				href="https://console.deepgram.com/"
+				target="_blank"
+				rel="noreferrer"
+				className="underline underline-offset-2 hover:text-foreground"
+			>Deepgram API key</a> with the Member role or higher, then add it above.
+		</p>
 	);
 }

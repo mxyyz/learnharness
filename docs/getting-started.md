@@ -33,6 +33,8 @@ Sessions are saved locally, including earlier messages when context is compacted
 
 Audio streams from your browser directly to Deepgram using a short-lived token. A `403 Insufficient permissions` error while obtaining that token can mean the key's role is insufficient.
 
+**Self-hosted alternative:** instead of Deepgram, set **Provider** to *Self-hosted (WebSocket)* under **Settings → Providers → Dictation** and configure a streaming STT backend registered by a plugin — e.g. install and enable the *transcribe-server STT* plugin (maintained in its own repo, `lh_transcribe-server_plugin`), pick its backend, and enter your server's stream URL (e.g. `wss://stt.homelab.internal/v1/audio/stream`, optional model alias). The connection is direct and keyless; the desktop app must trust the server's certificate (install your homelab CA in the system store).
+
 ## Use local files in a session
 
 In the desktop app, use the paperclip's **Files** or **Folder** choice, or drag files/folders into the content area, to insert their local paths. Files supports any file type and multiple selections; Folder attaches one directory path, including an empty folder, without expanding or reading its contents. Newly picked or dropped known folders get a trailing directory separator so their Folder icon survives saved messages and reloads; files stay unchanged. Older unmarked paths are not retrospectively classified. The agent can then locate/read supported content on the machine running LearnHarness under the existing file-access guards; attaching a path does not grant permissions. This is **not an upload**: originals stay where they are. Ordinary browsers cannot expose these local paths through the picker or drag-and-drop; you can paste a full path instead.

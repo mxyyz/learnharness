@@ -94,6 +94,36 @@ for (const newestFirst of [false, true]) test(`overlapping reads keep the newest
 	assert.equal(await store.getLanguage(), "multi");
 });
 
+test("update PUTs the whole merged section and getEffective resolves factory defaults", async () => {
+	const puts: unknown[] = [];
+	const store = createDictationLanguageStore(async (_url, init) => {
+		if (init?.method === "PUT") {
+			puts.push(JSON.parse(init.body as string));
+			return Response.json({ settings: { version: 1, dictation: JSON.parse(init.body as string) } });
+		}
+		return Response.json({ settings: { version: 1, dictation: { language: "fr", provider: "deepgram" } } });
+	});
+	assert.equal(await store.getLanguage(), "fr");
+	assert.deepEqual(await store.getEffective(), {
+		language: "fr", provider: "deepgram", backend: null, stream: { url: null, model: null },
+	});
+	assert.equal(await store.update({ provider: "ws", backend: "transcribe-server", stream: { url: "wss://stt.homelab.internal/v1/audio/stream", model: "voxtral" } }), true);
+	// the PUT body is the whole merged section, not just the patch
+	assert.deepEqual(puts[0], {
+		language: "fr", provider: "ws", backend: "transcribe-server",
+		stream: { url: "wss://stt.homelab.internal/v1/audio/stream", model: "voxtral" },
+	});
+	assert.deepEqual(await store.getEffective(), {
+		language: "fr", provider: "ws", backend: "transcribe-server",
+		stream: { url: "wss://stt.homelab.internal/v1/audio/stream", model: "voxtral" },
+	});
+	assert.equal(await store.save("multi"), true);
+	assert.deepEqual(puts[1], {
+		language: "multi", provider: "ws", backend: "transcribe-server",
+		stream: { url: "wss://stt.homelab.internal/v1/audio/stream", model: "voxtral" },
+	}, "language save keeps the other section fields (replace-whole merge)");
+});
+
 test("capture also waits for a write initiated as a pending read publishes its result", async () => {
 	const store = createDictationLanguageStore(async (_url, init) => Response.json({ settings: {
 		version: 1, dictation: { language: init?.method === "PUT" ? "multi" : "en" },

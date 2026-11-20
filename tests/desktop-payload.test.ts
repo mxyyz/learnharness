@@ -16,6 +16,7 @@ const AUTHORING_DOCS = [
 	"plugin-authoring.md", "plugin-architecture.md", "plugin-question-contract.md",
 	"plugin-problem-contract.md", "plugin-session-extension-contract.md", "plugin-tree-contract.md",
 	"plugin-view-context.md", "dialog-overlay-contract.md", "plugin-examples.md",
+	"plugin-dictation-backend-contract.md",
 ];
 
 function withPayload(test: (fixture: {
@@ -39,6 +40,7 @@ function withPayload(test: (fixture: {
 		write("core-plugins.json", fs.readFileSync(new URL("../core-plugins.json", import.meta.url), "utf8"));
 		write("scripts/build-core-plugins.mjs", fs.readFileSync(new URL("../scripts/build-core-plugins.mjs", import.meta.url), "utf8"));
 		write("src/core/plugins.ts", fs.readFileSync(new URL("../src/core/plugins.ts", import.meta.url), "utf8"));
+		write("src/core/dictation.ts", fs.readFileSync(new URL("../src/core/dictation.ts", import.meta.url), "utf8"));
 		for (const id of JSON.parse(fs.readFileSync(new URL("../core-plugins.json", import.meta.url), "utf8")) as string[]) {
 			write(`core-plugins/${id}/manifest.json`, JSON.stringify({ apiVersion: 1, id, name: id, version: "1.0.0", minAppVersion: "0.4.1", main: "main.js" }));
 			write(`core-plugins/${id}/main.js`, "export function activate() {};");

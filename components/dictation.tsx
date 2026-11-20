@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2Icon, MicIcon } from "lucide-react";
 import { useSettingsDialog } from "@/components/settings/settings-dialog";
 import { Hint } from "@/components/ui/hint";
-import { deepgramListenUrl, type DictationLanguage } from "@/src/core";
+import { deepgramListenUrl, type DictationLanguage, type DictationProvider, type PluginSttBackend, type PluginSttConnection, type PluginSttEvent, type EffectiveDictation } from "@/src/core";
+import { getSttBackend, subscribeSttBackends, validateSttConnection } from "@/components/dictation-backends";
 import { useDictationLanguage } from "@/components/dictation-preference";
 import { setDictationActive } from "@/components/dictation-state";
 import { dispatchFocusedPluginShortcut } from "@/components/plugin-input-focus";
@@ -111,6 +112,9 @@ export const DEEPGRAM_KEY_ID = "DEEPGRAM_API_KEY";
  * it and deep-links Settings → Keys → the Deepgram row. */
 export const DICTATION_KEYLESS = "Dictation needs a Deepgram key";
 export const DICTATION_ACTIVE_ELSEWHERE = "Dictation is active elsewhere";
+/** ws-provider terminal errors (shown on the idle button, cleared on next start). */
+export const DICTATION_NO_BACKEND = "Choose a dictation backend in Settings → Dictation";
+export const DICTATION_NO_STREAM_URL = "Add the stream URL in Settings → Dictation";
 
 // Mounted controllers do not claim capture. Only start() acquires the single
 // window-wide owner, synchronously, before settings/mic/token awaits.
@@ -197,6 +201,27 @@ export function createWarmMinter(
 }
 
 const warmTokens = createWarmMinter(mintFreshToken);
+
+/** One run's connection plan: the built-in Deepgram socket (token + tuned
+ * URL) or a plugin-registered streaming backend adapter. All wire details of
+ * a "ws" run live in the adapter; the engine only shuttles frames/events. */
+interface WsPlanInput { url: string; model?: string; language: string }
+type ConnPlan =
+	| { kind: "deepgram"; token: string; language: DictationLanguage }
+	| { kind: "ws"; conn: PluginSttConnection; backend: PluginSttBackend; input: WsPlanInput };
+
+function encodeFrame(plan: ConnPlan, frame: ArrayBuffer): string | ArrayBufferLike {
+	if (plan.kind === "deepgram") return frame;
+	return plan.conn.encodeAudio(frame);
+}
+
+/** Reconnect builds a FRESH plan — deepgram re-mints (a stale warm token is
+ * the likely culprit), ws re-runs the adapter's connect (fresh handshake). */
+async function reconnectPlan(plan: ConnPlan): Promise<ConnPlan> {
+	if (plan.kind === "deepgram") return { kind: "deepgram", token: await mintFreshToken(), language: plan.language };
+	const conn = validateSttConnection(await plan.backend.connect(plan.input));
+	return { kind: "ws", conn, backend: plan.backend, input: plan.input };
+}
 
 /* Persistent capture graph (mitigation C, owner 2026-09-27): one
  * app-lifetime AudioContext + a module-load memo. Created under the
@@ -345,7 +370,7 @@ export function useDictation({ append, destination = "primary", disabled = false
 }): Dictation {
 	const primary = destination === "primary";
 	const owner = useRef(Symbol("dictation")).current;
-	const { getLanguage } = useDictationLanguage();
+	const { getEffective } = useDictationLanguage();
 	const [phase, setPhaseState] = useState<DictationPhase>("idle");
 	const phaseRef = useRef<DictationPhase>("idle");
 	const setPhase = useCallback((next: DictationPhase) => {
@@ -375,6 +400,12 @@ export function useDictation({ append, destination = "primary", disabled = false
 	// the per-run nodes disconnect on teardown; the socket is recreated per
 	// run; the AudioContext is app-lifetime (mitigation C).
 	const wsRef = useRef<WebSocket | null>(null);
+	/** The active run's connection plan (deepgram token or ws adapter conn). */
+	const planRef = useRef<ConnPlan | null>(null);
+	/** Registry subscription aborting a ws run whose backend unregisters mid-run. */
+	const backendOffRef = useRef<(() => void) | null>(null);
+	/** Provider of the last started run — gates warm-token refreshes. */
+	const providerRef = useRef<DictationProvider>("deepgram");
 	const streamRef = useRef<MediaStream | null>(null);
 	/** Per-run graph nodes — the CONTEXT outlives runs (mitigation C). */
 	const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -407,6 +438,10 @@ export function useDictation({ append, destination = "primary", disabled = false
 	/** Full teardown of one run's machinery. Idempotent; generation-guarded by callers. */
 	const cleanup = useCallback((warmNext = true) => {
 		const endGen = ++genRef.current;
+		const wasDeepgram = providerRef.current === "deepgram";
+		backendOffRef.current?.();
+		backendOffRef.current = null;
+		planRef.current = null;
 		let appended: unknown;
 		// A second cleanup (cancel/dispose) cannot turn an unfinished async
 		// append into a successful finish: that would send the old draft.
@@ -455,7 +490,7 @@ export function useDictation({ append, destination = "primary", disabled = false
 				if (failed) waiter.reject(failed.error);
 				else waiter.resolve();
 			}
-			if (warmNext) warmTokens.refresh();
+			if (warmNext && wasDeepgram) warmTokens.refresh();
 		};
 		if (appended && typeof (appended as PromiseLike<unknown>).then === "function") {
 			appendPendingRef.current = true;
@@ -465,64 +500,103 @@ export function useDictation({ append, destination = "primary", disabled = false
 		} else complete(failure);
 	}, [flush, owner, setPhase]);
 
-	/** Open the Deepgram socket and wire its messages. `gen` guards staleness. */
+	/** Open the provider socket and wire its messages. `gen` guards staleness.
+	 * Deepgram keeps its exact wire behavior (bearer subprotocol, Results
+	 * messages, CloseStream); a "ws" plan delegates every wire detail to the
+	 * registered backend adapter. */
 	const openSocket = useCallback(
-		(gen: number, token: string, language: DictationLanguage) => {
+		(gen: number, plan: ConnPlan) => {
+			planRef.current = plan;
 			// Minted JWTs authenticate via the "bearer" subprotocol — ["token",
 			// jwt] is rejected at the handshake (verified live; "token" is for
 			// raw API keys only, as in the owner's pi dictate extension).
-			const ws = new WebSocket(deepgramListenUrl(language), ["bearer", token]);
+			const ws = plan.kind === "deepgram"
+				? new WebSocket(deepgramListenUrl(plan.language), ["bearer", plan.token])
+				: new WebSocket(plan.conn.url, plan.conn.protocols);
 			wsRef.current = ws;
 
 			ws.addEventListener("open", () => {
 				if (gen !== genRef.current) return;
+				if (plan.kind === "ws") {
+					try {
+						for (const frame of plan.conn.startFrames ?? []) ws.send(frame as string | ArrayBufferLike);
+					} catch (error) {
+						setError(error instanceof Error ? error.message : "STT backend rejected the session");
+						cleanup();
+						return;
+					}
+				}
 				// Mitigation A: everything captured during the handshake (or a
-				// reconnect gap) goes out now, in order — Deepgram accepts
+				// reconnect gap) goes out now, in order — providers accept
 				// faster-than-realtime sends.
-				for (const frame of pendingRef.current) ws.send(frame);
+				for (const frame of pendingRef.current) ws.send(encodeFrame(plan, frame));
 				pendingRef.current = [];
 				setPhase("recording");
 			});
 			ws.addEventListener("message", (ev) => {
 				if (gen !== genRef.current) return;
-				let msg: any;
-				try {
-					msg = JSON.parse(ev.data as string);
-				} catch {
+				const data = typeof ev.data === "string" ? ev.data
+					: ev.data instanceof ArrayBuffer ? new TextDecoder().decode(ev.data)
+					: null;
+				if (data === null) return;
+				if (plan.kind === "deepgram") {
+					let msg: any;
+					try {
+						msg = JSON.parse(data);
+					} catch {
+						return;
+					}
+					if (msg.type === "Results") {
+						const text: string | undefined = msg.channel?.alternatives?.[0]?.transcript;
+						// Only finals stream (interim_results=false). DEFERRED (owner
+						// round 2): they buffer here and reach the input once, at
+						// teardown — the meter is the only live feedback.
+						if (msg.is_final && text) bufferRef.current.push(text);
+					}
 					return;
 				}
-				if (msg.type === "Results") {
-					const text: string | undefined = msg.channel?.alternatives?.[0]?.transcript;
-					// Only finals stream (interim_results=false). DEFERRED (owner
-					// round 2): they buffer here and reach the input once, at
-					// teardown — the meter is the only live feedback.
-					if (msg.is_final && text) bufferRef.current.push(text);
+				let event: PluginSttEvent | null;
+				try {
+					event = plan.conn.parseMessage(data);
+				} catch (error) {
+					setError(error instanceof Error ? error.message : "STT backend message error");
+					cleanup();
+					return;
 				}
+				if (!event) return;
+				if (event.error) {
+					setError(event.error);
+					cleanup();
+					return;
+				}
+				// Deferred UX (owner round 2): partials are not committed; the
+				// final buffers here and reaches the input once, at teardown.
+				if (event.final) bufferRef.current.push(event.final);
 			});
 			ws.addEventListener("close", (ev) => {
 				if (gen !== genRef.current) return;
 				if (ev.code === 1000) {
-					// Our own CloseStream landing: finalize now — the stop path's
+					// Our own stop landing: finalize now — the stop path's
 					// safety net stays as the no-close backstop only.
 					cleanup();
 					return;
 				}
-				// Abnormal close mid-run: ONE reconnect with a fresh token (the
+				// Abnormal close mid-run: ONE reconnect with a fresh plan (the
 				// research pass: resume is our job, no SDK to lean on).
 				if (reconnectsRef.current < 1) {
 					reconnectsRef.current++;
-					mintFreshToken() // always FRESH — a stale warm token is the likely culprit
-						.then((t) => {
-							if (gen === genRef.current) openSocket(gen, t, language);
+					reconnectPlan(plan)
+						.then((next) => {
+							if (gen === genRef.current) openSocket(gen, next);
 						})
 						.catch(() => {
 							if (gen === genRef.current) {
-								setError("Deepgram reconnect failed");
+								setError(plan.kind === "deepgram" ? "Deepgram reconnect failed" : "STT reconnect failed");
 								cleanup();
 							}
 						});
 				} else {
-					setError(`Deepgram connection lost (${ev.code})`);
+					setError(plan.kind === "deepgram" ? `Deepgram connection lost (${ev.code})` : `STT connection lost (${ev.code})`);
 					cleanup();
 				}
 			});
@@ -549,25 +623,49 @@ export function useDictation({ append, destination = "primary", disabled = false
 		bufferRef.current = []; // fresh run, fresh buffer (round 2)
 		pendingRef.current = []; // fresh run, fresh queue (mitigation A)
 		const gen = ++genRef.current;
-		let language: DictationLanguage;
+		let eff: EffectiveDictation;
 		try {
-			language = await getLanguage();
+			eff = await getEffective();
 		} catch (e) {
 			if (gen !== genRef.current) return;
-			setError(e instanceof Error ? e.message : "Dictation language unavailable");
+			setError(e instanceof Error ? e.message : "Dictation settings unavailable");
 			cleanup();
 			return;
 		}
 		if (gen !== genRef.current) return;
+		providerRef.current = eff.provider;
+		// ws-provider config checks fail fast, before the mic prompt.
+		let wsBackend: PluginSttBackend | null = null;
+		let wsInput: WsPlanInput | null = null;
+		if (eff.provider === "ws") {
+			if (!eff.backend) {
+				setError(DICTATION_NO_BACKEND);
+				cleanup();
+				return;
+			}
+			if (!eff.stream.url) {
+				setError(DICTATION_NO_STREAM_URL);
+				cleanup();
+				return;
+			}
+			const registration = getSttBackend(eff.backend);
+			if (!registration) {
+				setError(`Dictation backend "${eff.backend}" is unavailable — enable its plugin`);
+				cleanup();
+				return;
+			}
+			wsBackend = registration.backend;
+			wsInput = { url: eff.stream.url, model: eff.stream.model ?? undefined, language: eff.language };
+		}
 
 		// Mitigation D: the warm token (pre-minted at mount / after the last
 		// run) resolves ~instantly; a cold/keyless mint surfaces below. The
 		// mic is the long pole (macOS HAL + APM init) and gates everything —
 		// the token runs concurrently with it. 127.0.0.1 is a secure
 		// context, so getUserMedia works without TLS; macOS TCC prompts on
-		// first use.
-		const tokenPromise = warmTokens.mint();
-		tokenPromise.catch(() => {}); // surfaced below; no unhandled rejection
+		// first use. A ws run has no token to mint (deepgram only).
+		const tokenPromise = eff.provider === "deepgram" ? warmTokens.mint() : null;
+		if (tokenPromise) tokenPromise.catch(() => {}); // surfaced below; no unhandled rejection
 		const micPromise = navigator.mediaDevices.getUserMedia({
 			audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
 		});
@@ -596,10 +694,20 @@ export function useDictation({ append, destination = "primary", disabled = false
 					levelRef.current = msg.rms ?? 0; // never reset to zero (dictate pattern)
 				} else if (msg.type === "audio") {
 					const ws = wsRef.current;
-					if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg.buffer!);
-					// Mitigation A: not OPEN yet (handshake or reconnect gap) —
-					// queue, capped; the open handler flushes in order.
-					else {
+					const plan = planRef.current;
+					if (ws && ws.readyState === WebSocket.OPEN && plan) {
+						try {
+							ws.send(encodeFrame(plan, msg.buffer!));
+						} catch (error) {
+							if (gen === genRef.current) {
+								setError(error instanceof Error ? error.message : "STT backend audio error");
+								cleanup();
+							}
+							return;
+						}
+					} else {
+						// Mitigation A: not OPEN yet (handshake or reconnect gap) —
+						// queue, capped; the open handler flushes in order.
 						pendingRef.current.push(msg.buffer!);
 						if (pendingRef.current.length > 256) pendingRef.current.shift();
 					}
@@ -624,20 +732,43 @@ export function useDictation({ append, destination = "primary", disabled = false
 			return;
 		}
 		if (gen !== genRef.current) return;
-		let token: string;
+		if (eff.provider === "deepgram") {
+			let token: string;
+			try {
+				token = await tokenPromise!;
+			} catch (e) {
+				if (gen !== genRef.current) return;
+				setError(e instanceof Error ? e.message : "token unavailable");
+				cleanup();
+				return;
+			}
+			if (gen !== genRef.current) return;
+			// Mitigation B: the handshake fires the moment the graph is live,
+			// overlapping any remaining token wait — mic-gated, never before it.
+			openSocket(gen, { kind: "deepgram", token, language: eff.language });
+			return;
+		}
+		// ws provider: abort the run if its backend unregisters mid-run.
+		const off = subscribeSttBackends(() => {
+			if (gen !== genRef.current) return;
+			if (!getSttBackend(eff.backend!)) {
+				setError(`Dictation backend "${eff.backend}" was disabled`);
+				cleanup();
+			}
+		});
+		backendOffRef.current = off;
+		let conn: PluginSttConnection;
 		try {
-			token = await tokenPromise;
+			conn = validateSttConnection(await wsBackend!.connect(wsInput!));
 		} catch (e) {
 			if (gen !== genRef.current) return;
-			setError(e instanceof Error ? e.message : "token unavailable");
+			setError(e instanceof Error ? e.message : "STT backend connect failed");
 			cleanup();
 			return;
 		}
 		if (gen !== genRef.current) return;
-		// Mitigation B: the handshake fires the moment the graph is live,
-		// overlapping any remaining token wait — mic-gated, never before it.
-		openSocket(gen, token, language);
-	}, [openSocket, cleanup, getLanguage, owner, primary, setPhase]);
+		openSocket(gen, { kind: "ws", conn, backend: wsBackend!, input: wsInput! });
+	}, [openSocket, cleanup, getEffective, owner, primary, setPhase]);
 
 	const stop = useCallback(() => {
 		const gen = genRef.current;
@@ -654,18 +785,30 @@ export function useDictation({ append, destination = "primary", disabled = false
 		workletRef.current = null;
 
 		const ws = wsRef.current;
+		const plan = planRef.current;
+		const stopPayload = plan?.kind === "deepgram" ? JSON.stringify({ type: "CloseStream" }) : plan?.conn.stopFrame ?? null;
 		if (ws && ws.readyState === WebSocket.OPEN) {
-			try {
-				ws.send(JSON.stringify({ type: "CloseStream" }));
-			} catch {
-				cleanup();
-				return;
+			if (stopPayload !== null) {
+				try {
+					ws.send(stopPayload);
+				} catch {
+					cleanup();
+					return;
+				}
+				// The provider flushes remaining finals then closes; if it never
+				// does, the safety net ends the run anyway (dictate pattern).
+				safetyRef.current = setTimeout(() => {
+					if (gen === genRef.current) cleanup();
+				}, 3000);
+			} else {
+				// Adapter without a stop frame: close ourselves — the close
+				// handler (code 1000) finalizes the run.
+				try {
+					ws.close();
+				} catch {
+					cleanup();
+				}
 			}
-			// Deepgram flushes remaining finals then closes; if it never
-			// does, the safety net ends the run anyway (dictate pattern).
-			safetyRef.current = setTimeout(() => {
-				if (gen === genRef.current) cleanup();
-			}, 3000);
 		} else {
 			cleanup();
 		}
@@ -718,14 +861,16 @@ export function useDictation({ append, destination = "primary", disabled = false
 	// focused plugin control first, otherwise core fallback; Esc always
 	// cancels the actual recording owner rather than the focused widget.
 	useEffect(() => {
-		warmTokens.refresh(); // pre-mint at mount (mitigation D) — silent if keyless
+		// Pre-mint at mount (mitigation D) — deepgram only; a ws run has no
+		// token. Silent if keyless.
+		void getEffective().then((eff) => { if (eff.provider === "deepgram") warmTokens.refresh(); }).catch(() => {});
 		return () => {
 			// Navigation cancels capture: invalidate every pending await before
 			// releasing resources, and never append into a different page's input.
 			bufferRef.current = [];
 			cleanup(false);
 		};
-	}, [cleanup]);
+	}, [cleanup, getEffective]);
 	useEffect(() => registerController(owner, { primary, toggle, cancel }), [owner, primary, toggle, cancel]);
 
 	return {

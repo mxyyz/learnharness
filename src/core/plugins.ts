@@ -271,6 +271,37 @@ export interface PluginToolRenderer {
 	 * Presentation alone does not create pending learner input or run a tool. */
 	mount(container: HTMLElement, tool: PluginToolRenderProps): void | PluginCleanup | Promise<void | PluginCleanup>;
 }
+/** One parsed server message from a streaming STT backend: a partial hypothesis
+ * (display-optional), a final transcript segment, or a terminal error. */
+export interface PluginSttEvent {
+	partial?: string;
+	final?: string;
+	error?: string;
+}
+/** The wire description a streaming STT backend returns from `connect`: the
+ * WebSocket URL, optional handshake subprotocols, optional start frames sent on
+ * open, how each captured PCM frame is encoded for the socket, how incoming
+ * server text messages parse into events, and the optional stop frame. */
+export interface PluginSttConnection {
+	url: string;
+	protocols?: string[];
+	startFrames?: (string | ArrayBufferLike)[];
+	encodeAudio(frame: ArrayBuffer): string | ArrayBufferLike;
+	parseMessage(data: string): PluginSttEvent | null;
+	stopFrame?: string | null;
+}
+/** Backend id pattern for STT backends (route-safe, not a folder name). */
+export { STT_BACKEND_ID_PATTERN } from "./dictation.ts";
+/** A plugin-registered streaming speech-to-text backend for native dictation.
+ * `connect` receives the user's stream config and the RAW dictation language
+ * code (e.g. "multi", "en-GB"); mapping it to the backend's expected form is
+ * the adapter's job. May be async (e.g. to mint a handshake token). */
+export interface PluginSttBackend {
+	id: string;
+	label: string;
+	description?: string;
+	connect(input: { url: string; model?: string; language: string }): PluginSttConnection | Promise<PluginSttConnection>;
+}
 /** Frontend activation scope, once per enabled plugin per window. Registrations,
  * subscriptions and UI expire with this activation; backend work is server-owned. */
 export interface PluginFrontendContext {
@@ -325,6 +356,11 @@ export interface PluginFrontendContext {
 	 * versions. Invalid/duplicate registrations throw. Returns unregister; does not
 	 * pose, process or conclude a problem by rendering it. */
 	registerProblemRenderer(renderer: PluginProblemRenderer): () => void;
+	/** Register a streaming STT backend for native dictation (provider "ws").
+	 * Invalid or duplicate registrations throw; the backend is validated and
+	 * frozen. Returns unregister; the registration expires with this
+	 * activation, and a dictation run using it aborts if it disappears. */
+	registerSttBackend(backend: PluginSttBackend): () => void;
 	/** Invoke this plugin's named backend operation with JSON-compatible input and
 	 * resolve its result. Rejects on serialization, transport, backend or activation
 	 * failure. T is a caller annotation, not runtime validation; no caller signal or

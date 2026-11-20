@@ -23,6 +23,7 @@ import type {
 	CustomModelOverride,
 	GeneralSettings,
 	DictationSettings,
+	DictationStreamSettings,
 	GraphSettings,
 	ModelsSettings,
 	ModelSlot,
@@ -31,7 +32,7 @@ import type {
 import { BACKGROUND_MODEL_ROLES, CACHE_RETENTIONS, COMPACTION_THRESHOLD_FLOOR, CUSTOM_MODEL_PIN_FLOOR, EXTRACTION_CHUNK_TOKENS_FLOOR, MODEL_SLOTS } from "../core/settings.ts";
 import { WRITABLE_TOOL_KEYS } from "../core/pending.ts";
 import { isSearchEngineId, SEARCH_ENGINES } from "../core/search.ts";
-import { isDictationLanguage } from "../core/dictation.ts";
+import { isDictationLanguage, isDictationProvider, normalizeStreamUrl, DICTATION_PROVIDERS, STT_BACKEND_ID_PATTERN } from "../core/dictation.ts";
 import { parseFileAccessSettings } from "../core/file-access.ts";
 
 /** Parsed-or-rejected — `ok: false` carries the 400's error message. */
@@ -439,13 +440,47 @@ export function parseCompactionSettingsBody(body: unknown): SettingsBodyResult<C
 	return { ok: true, settings };
 }
 
-/** dictation: { language?: one of Nova-3's supported language codes } */
+/** dictation: { language?, provider?, backend?, stream?: { url?, model? } } —
+ * replace-whole like every section: absent fields clear. provider is
+ * "deepgram" | "ws"; backend is a plugin STT backend id; stream.url is a
+ * normalized ws(s) URL. */
 export function parseDictationSettingsBody(body: unknown): SettingsBodyResult<DictationSettings> {
 	const raw = asRecord(body);
 	if (!raw) return { ok: false, error: "Invalid JSON body" };
-	if (raw.language === undefined) return { ok: true, settings: {} };
-	if (!isDictationLanguage(raw.language)) return { ok: false, error: "Unsupported dictation language" };
-	return { ok: true, settings: { language: raw.language } };
+	const settings: DictationSettings = {};
+	if (raw.language !== undefined) {
+		if (!isDictationLanguage(raw.language)) return { ok: false, error: "Unsupported dictation language" };
+		settings.language = raw.language;
+	}
+	if (raw.provider !== undefined) {
+		if (!isDictationProvider(raw.provider)) {
+			return { ok: false, error: `Unsupported dictation provider (supported: ${DICTATION_PROVIDERS.join(", ")})` };
+		}
+		settings.provider = raw.provider;
+	}
+	if (raw.backend !== undefined) {
+		if (typeof raw.backend !== "string" || !STT_BACKEND_ID_PATTERN.test(raw.backend)) {
+			return { ok: false, error: "Invalid dictation backend id" };
+		}
+		settings.backend = raw.backend;
+	}
+	if (raw.stream !== undefined) {
+		const s = asRecord(raw.stream);
+		if (!s) return { ok: false, error: "dictation stream must be an object" };
+		const stream: DictationStreamSettings = {};
+		if (s.url !== undefined) {
+			if (typeof s.url !== "string") return { ok: false, error: "dictation stream url must be a string" };
+			const url = normalizeStreamUrl(s.url);
+			if (!url) return { ok: false, error: "dictation stream url must be a ws:// or wss:// URL without credentials or fragment" };
+			stream.url = url;
+		}
+		if (s.model !== undefined) {
+			if (typeof s.model !== "string" || !s.model.trim()) return { ok: false, error: "dictation stream model must be a nonempty string" };
+			stream.model = s.model.trim();
+		}
+		settings.stream = stream;
+	}
+	return { ok: true, settings };
 }
 
 /** The custom endpoint's per-model pins (PATCH /api/custom-provider): the

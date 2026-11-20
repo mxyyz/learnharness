@@ -35,7 +35,8 @@ import { CLAUDE_CODE_PROVIDER } from "./contracts/claude-code.ts";
 import type { ModelRole } from "../../config.ts";
 import type { ChatSettings } from "./contracts/chat.ts";
 import { isSearchEngineId, type SearchEngineId } from "./search.ts";
-import { isDictationLanguage, type DictationLanguage } from "./dictation.ts";
+import { isDictationLanguage, isDictationProvider, normalizeStreamUrl, STT_BACKEND_ID_PATTERN, type DictationLanguage, type DictationProvider } from "./dictation.ts";
+export type { DictationLanguage, DictationProvider } from "./dictation.ts";
 import { parseFileAccessSettings, type FileAccessSettings } from "./file-access.ts";
 import { COLOR_OVERRIDE_KEYS, isThemeId, type AppearanceColorOverrides } from "./themes.ts";
 
@@ -345,6 +346,20 @@ export interface GeneralSettings {
 /** One app-wide dictation preference, shared by every composer. */
 export interface DictationSettings {
 	language?: DictationLanguage;
+	/** STT backend kind: built-in Deepgram cloud, or a plugin-registered
+	 * streaming WebSocket backend ("ws"). Absent = deepgram (factory). */
+	provider?: DictationProvider;
+	/** Registered backend id used when provider is "ws". */
+	backend?: string;
+	/** Non-secret stream endpoint config for the "ws" provider. */
+	stream?: DictationStreamSettings;
+}
+
+export interface DictationStreamSettings {
+	/** Normalized ws:// or wss:// URL (see normalizeStreamUrl). */
+	url?: string;
+	/** Optional model alias sent to the backend. */
+	model?: string;
 }
 
 /** Agent settings — everything about the non-conversation machinery. */
@@ -516,7 +531,7 @@ export interface FactorySettings {
 	version: number;
 	agent: Required<Pick<AgentSettings, "workerRequestConcurrency">>;
 	general: Required<GeneralSettings>;
-	dictation: Required<DictationSettings>;
+	dictation: Required<Pick<DictationSettings, "language" | "provider">>;
 	appearance: {
 		theme: string;
 		background: string | null;
@@ -539,7 +554,7 @@ export const FACTORY_SETTINGS: FactorySettings = {
 	version: CURRENT_SETTINGS_VERSION,
 	agent: { workerRequestConcurrency: 8 },
 	general: { autoUpdate: true },
-	dictation: { language: "en" },
+	dictation: { language: "en", provider: "deepgram" },
 	appearance: {
 		theme: "default",
 		background: null, // null = the active theme's background
@@ -867,10 +882,29 @@ export function sanitizeUserSettings(raw: unknown): UserSettings | null {
 	}
 	if (r.dictation !== undefined) {
 		const raw = r.dictation;
-		out.dictation = raw !== null && typeof raw === "object" && !Array.isArray(raw) &&
-			isDictationLanguage((raw as Record<string, unknown>).language)
-			? { language: (raw as DictationSettings).language }
-			: {};
+		if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+			out.dictation = {};
+		} else {
+			const o = raw as Record<string, unknown>;
+			const d: DictationSettings = {};
+			if (isDictationLanguage(o.language)) d.language = o.language;
+			if (isDictationProvider(o.provider)) d.provider = o.provider;
+			if (typeof o.backend === "string" && STT_BACKEND_ID_PATTERN.test(o.backend)) d.backend = o.backend;
+			if (o.stream !== undefined) {
+				const s = o.stream;
+				if (s !== null && typeof s === "object" && !Array.isArray(s)) {
+					const so = s as Record<string, unknown>;
+					const stream: DictationStreamSettings = {};
+					if (typeof so.url === "string") {
+						const url = normalizeStreamUrl(so.url);
+						if (url) stream.url = url;
+					}
+					if (typeof so.model === "string" && so.model.trim()) stream.model = so.model.trim();
+					if (Object.keys(stream).length > 0) d.stream = stream;
+				}
+			}
+			out.dictation = d;
+		}
 	}
 	if (r.claudeCode !== undefined) {
 		const raw = r.claudeCode;

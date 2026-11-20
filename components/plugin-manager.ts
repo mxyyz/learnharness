@@ -2,7 +2,9 @@ import type {
 	PluginAction, PluginCleanup, PluginFrontendContext, PluginFrontendModule, PluginInfo,
 	PluginNotification, PluginView, ServerEvent, PluginCodeBlockRenderer, PluginToolRenderer,
 	PluginActionContext, PluginActionPlacement, PluginSettingsRegistration, PluginPageActionContext, PluginActionShortcut,
+	PluginSttBackend,
 } from "@/src/core";
+import { registerSttBackend as registerSttBackendInRegistry } from "./dictation-backends.ts";
 
 import { preparePluginShortcut, copyPluginSubmissionTarget, preparePluginSubmissionInterceptor, type PluginSubmissionInterceptor, type PluginSubmissionTarget } from "../src/core/index.ts";
 import { orderSubmissionInterceptors, type SubmissionInterceptorRegistration } from "./plugin-submission-runner.ts";
@@ -431,6 +433,20 @@ export class PluginFrontendManager {
 				return () => { if (life.problemRenderers.get(owned.id) === registration) { life.problemRenderers.delete(owned.id); this.publish(); } };
 			},
 			registerSettings,
+			registerSttBackend: (backend: PluginSttBackend) => {
+				if (!this.current(life)) return () => {};
+				// Validates shape, rejects duplicates, freezes/binds, publishes.
+				const unregister = registerSttBackendInRegistry(life.id, backend);
+				const off = () => unregister();
+				life.controller.signal.addEventListener("abort", off, { once: true });
+				let registered = true;
+				return () => {
+					if (!registered) return;
+					registered = false;
+					life.controller.signal.removeEventListener("abort", off);
+					off();
+				};
+			},
 			call: async <T>(operation: string, input?: unknown) => {
 				if (!this.current(life)) throw new Error("Plugin is no longer active");
 				const body = await this.json(`/api/plugins/${encodeURIComponent(info.id)}/call`, {

@@ -93,6 +93,7 @@ a plugin.
 | Convert an uploaded PDF/text file | Frontend `ctx.documents.toMarkdown` below |
 | Read saved learning records | Backend `ctx.learning` below |
 | Call models, run conversations or bounded tasks | Backend `ctx.inference`, `ctx.agents`, `ctx.workers` below |
+| Provide a streaming STT backend for native dictation | `registerSttBackend`; [STT backend contract](plugin-dictation-backend-contract.md) |
 
 Feature contracts define lifecycle and acceptance rules; this guide is the entry point.
 Browse the [complete API reference](plugin-api/README.md) for exact signatures and

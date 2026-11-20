@@ -81,6 +81,44 @@ export function isDictationLanguage(value: unknown): value is DictationLanguage 
 	return DICTATION_LANGUAGES.some(({ code }) => code === value);
 }
 
+/** Backend id pattern for STT backends (route-safe, not a folder name). */
+export const STT_BACKEND_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** Dictation STT providers: the built-in Deepgram cloud backend, or a
+ * plugin-registered streaming WebSocket backend ("ws"). */
+export const DICTATION_PROVIDERS = ["deepgram", "ws"] as const;
+export type DictationProvider = (typeof DICTATION_PROVIDERS)[number];
+
+export function isDictationProvider(value: unknown): value is DictationProvider {
+	return (DICTATION_PROVIDERS as readonly unknown[]).includes(value);
+}
+
+/** Normalize a streaming STT endpoint URL: ws:// or wss:// only, no
+ * credentials, no fragment; query string is allowed (some servers take an
+ * api key there). Returns "" when invalid. */
+export function normalizeStreamUrl(raw: string): string {
+	const value = raw.trim();
+	if (!value) return "";
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		return "";
+	}
+	if (url.protocol !== "ws:" && url.protocol !== "wss:") return "";
+	if (url.username || url.password || url.hash) return "";
+	url.pathname = url.pathname.replace(/\/+$/, "") || "/";
+	return url.toString();
+}
+
+/** Map a dictation language code for streaming backends that expect a plain
+ * alpha-2 code: "multi" → undefined (server auto-detect); "en-GB" → "en";
+ * "zh-Hans" → "zh"; already-short codes pass through lowercased. */
+export function streamLanguage(language: DictationLanguage): string | undefined {
+	if (language === "multi") return undefined;
+	return language.split("-")[0]!.toLowerCase();
+}
+
 /** Only language varies. Keep the owner's tuned streaming parameters. */
 export function deepgramListenUrl(language: DictationLanguage): string {
 	return "wss://api.deepgram.com/v1/listen" +

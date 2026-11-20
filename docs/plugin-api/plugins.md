@@ -26,6 +26,9 @@
 - [PluginNotification](#pluginnotification)
 - [PluginPageActionContext](#pluginpageactioncontext)
 - [PluginSettingsRegistration](#pluginsettingsregistration)
+- [PluginSttBackend](#pluginsttbackend)
+- [PluginSttConnection](#pluginsttconnection)
+- [PluginSttEvent](#pluginsttevent)
 - [PluginToolContext](#plugintoolcontext)
 - [PluginToolRenderer](#plugintoolrenderer)
 - [PluginToolRenderProps](#plugintoolrenderprops)
@@ -678,6 +681,7 @@ export interface PluginFrontendContext {
     registerToolRenderer(renderer: PluginToolRenderer): () => void;
     registerQuestionRenderer(renderer: PluginQuestionRenderer): () => void;
     registerProblemRenderer(renderer: PluginProblemRenderer): () => void;
+    registerSttBackend(backend: PluginSttBackend): () => void;
     call<T = unknown>(operation: string, input?: unknown): Promise<T>;
     readonly documents: {
         toMarkdown(file: File, options?: {
@@ -701,7 +705,7 @@ export interface PluginFrontendContext {
 }
 ```
 
-**Related types:** [PluginAction](plugins.md#pluginaction), [PluginActionPlacement](plugins.md#pluginactionplacement), [PluginCleanup](plugins.md#plugincleanup), [PluginCodeBlockRenderer](plugins.md#plugincodeblockrenderer), [PluginManifest](plugins.md#pluginmanifest), [PluginNotification](plugins.md#pluginnotification), [PluginProblemRenderer](plugin-problems.md#pluginproblemrenderer), [PluginQuestionRenderer](plugin-questions.md#pluginquestionrenderer), [PluginSettingsRegistration](plugins.md#pluginsettingsregistration), [PluginSettingsSchema](plugin-ui.md#pluginsettingsschema), [PluginSubmissionInterceptor](plugin-submissions.md#pluginsubmissioninterceptor), [PluginToolRenderer](plugins.md#plugintoolrenderer), [PluginUi](plugin-ui.md#pluginui), [PluginView](plugins.md#pluginview), [PluginWidgetHandle](plugin-ui.md#pluginwidgethandle), [ServerEvent](events.md#serverevent).
+**Related types:** [PluginAction](plugins.md#pluginaction), [PluginActionPlacement](plugins.md#pluginactionplacement), [PluginCleanup](plugins.md#plugincleanup), [PluginCodeBlockRenderer](plugins.md#plugincodeblockrenderer), [PluginManifest](plugins.md#pluginmanifest), [PluginNotification](plugins.md#pluginnotification), [PluginProblemRenderer](plugin-problems.md#pluginproblemrenderer), [PluginQuestionRenderer](plugin-questions.md#pluginquestionrenderer), [PluginSettingsRegistration](plugins.md#pluginsettingsregistration), [PluginSettingsSchema](plugin-ui.md#pluginsettingsschema), [PluginSttBackend](plugins.md#pluginsttbackend), [PluginSubmissionInterceptor](plugin-submissions.md#pluginsubmissioninterceptor), [PluginToolRenderer](plugins.md#plugintoolrenderer), [PluginUi](plugin-ui.md#pluginui), [PluginView](plugins.md#pluginview), [PluginWidgetHandle](plugin-ui.md#pluginwidgethandle), [ServerEvent](events.md#serverevent).
 
 **Member index** (including nested object members; inherited members are defined in the linked base types):
 
@@ -720,6 +724,7 @@ export interface PluginFrontendContext {
 - [registerToolRenderer](#pluginfrontendcontext-registertoolrenderer)
 - [registerQuestionRenderer](#pluginfrontendcontext-registerquestionrenderer)
 - [registerProblemRenderer](#pluginfrontendcontext-registerproblemrenderer)
+- [registerSttBackend](#pluginfrontendcontext-registersttbackend)
 - [call](#pluginfrontendcontext-call)
 - [documents](#pluginfrontendcontext-documents)
 - [documents.toMarkdown](#pluginfrontendcontext-documentstomarkdown)
@@ -954,6 +959,23 @@ registerProblemRenderer(renderer: PluginProblemRenderer): () => void;
 | Parameter | Type |
 | --- | --- |
 | `renderer` | `PluginProblemRenderer` |
+
+**Returns:** `() => void`.
+
+### PluginFrontendContext registerSttBackend
+
+Register a streaming STT backend for native dictation (provider "ws").
+Invalid or duplicate registrations throw; the backend is validated and
+frozen. Returns unregister; the registration expires with this
+activation, and a dictation run using it aborts if it disappears.
+
+```ts
+registerSttBackend(backend: PluginSttBackend): () => void;
+```
+
+| Parameter | Type |
+| --- | --- |
+| `backend` | `PluginSttBackend` |
 
 **Returns:** `() => void`.
 
@@ -1807,6 +1829,189 @@ export type PluginSettingsRegistration = PluginView["mount"] | import("./plugin-
 ```
 
 **Related types:** [PluginSettingsSchema](plugin-ui.md#pluginsettingsschema), [PluginView](plugins.md#pluginview).
+
+## PluginSttBackend
+
+Public SDK type, exported as `PluginSttBackend`. Import with `import type`; the SDK has no runtime exports.
+
+A plugin-registered streaming speech-to-text backend for native dictation.
+`connect` receives the user's stream config and the RAW dictation language
+code (e.g. "multi", "en-GB"); mapping it to the backend's expected form is
+the adapter's job. May be async (e.g. to mint a handshake token).
+
+```ts
+export interface PluginSttBackend {
+    id: string;
+    label: string;
+    description?: string;
+    connect(input: {
+        url: string;
+        model?: string;
+        language: string;
+    }): PluginSttConnection | Promise<PluginSttConnection>;
+}
+```
+
+**Related types:** [PluginSttConnection](plugins.md#pluginsttconnection).
+
+**Member index** (including nested object members; inherited members are defined in the linked base types):
+
+- [id](#pluginsttbackend-id)
+- [label](#pluginsttbackend-label)
+- [description](#pluginsttbackend-description)
+- [connect](#pluginsttbackend-connect)
+
+### PluginSttBackend id
+
+```ts
+id: string;
+```
+
+### PluginSttBackend label
+
+```ts
+label: string;
+```
+
+### PluginSttBackend description
+
+```ts
+description?: string;
+```
+
+### PluginSttBackend connect
+
+```ts
+connect(input: {
+    url: string;
+    model?: string;
+    language: string;
+}): PluginSttConnection | Promise<PluginSttConnection>;
+```
+
+| Parameter | Type |
+| --- | --- |
+| `input` | `{         url: string;         model?: string;         language: string;     }` |
+
+**Returns:** `PluginSttConnection \| Promise<PluginSttConnection>`.
+
+## PluginSttConnection
+
+Public SDK type, exported as `PluginSttConnection`. Import with `import type`; the SDK has no runtime exports.
+
+The wire description a streaming STT backend returns from `connect`: the
+WebSocket URL, optional handshake subprotocols, optional start frames sent on
+open, how each captured PCM frame is encoded for the socket, how incoming
+server text messages parse into events, and the optional stop frame.
+
+```ts
+export interface PluginSttConnection {
+    url: string;
+    protocols?: string[];
+    startFrames?: (string | ArrayBufferLike)[];
+    encodeAudio(frame: ArrayBuffer): string | ArrayBufferLike;
+    parseMessage(data: string): PluginSttEvent | null;
+    stopFrame?: string | null;
+}
+```
+
+**Related types:** [PluginSttEvent](plugins.md#pluginsttevent).
+
+**Member index** (including nested object members; inherited members are defined in the linked base types):
+
+- [url](#pluginsttconnection-url)
+- [protocols](#pluginsttconnection-protocols)
+- [startFrames](#pluginsttconnection-startframes)
+- [encodeAudio](#pluginsttconnection-encodeaudio)
+- [parseMessage](#pluginsttconnection-parsemessage)
+- [stopFrame](#pluginsttconnection-stopframe)
+
+### PluginSttConnection url
+
+```ts
+url: string;
+```
+
+### PluginSttConnection protocols
+
+```ts
+protocols?: string[];
+```
+
+### PluginSttConnection startFrames
+
+```ts
+startFrames?: (string | ArrayBufferLike)[];
+```
+
+### PluginSttConnection encodeAudio
+
+```ts
+encodeAudio(frame: ArrayBuffer): string | ArrayBufferLike;
+```
+
+| Parameter | Type |
+| --- | --- |
+| `frame` | `ArrayBuffer` |
+
+**Returns:** `string \| ArrayBufferLike`.
+
+### PluginSttConnection parseMessage
+
+```ts
+parseMessage(data: string): PluginSttEvent | null;
+```
+
+| Parameter | Type |
+| --- | --- |
+| `data` | `string` |
+
+**Returns:** `PluginSttEvent \| null`.
+
+### PluginSttConnection stopFrame
+
+```ts
+stopFrame?: string | null;
+```
+
+## PluginSttEvent
+
+Public SDK type, exported as `PluginSttEvent`. Import with `import type`; the SDK has no runtime exports.
+
+One parsed server message from a streaming STT backend: a partial hypothesis
+(display-optional), a final transcript segment, or a terminal error.
+
+```ts
+export interface PluginSttEvent {
+    partial?: string;
+    final?: string;
+    error?: string;
+}
+```
+
+**Member index** (including nested object members; inherited members are defined in the linked base types):
+
+- [partial](#pluginsttevent-partial)
+- [final](#pluginsttevent-final)
+- [error](#pluginsttevent-error)
+
+### PluginSttEvent partial
+
+```ts
+partial?: string;
+```
+
+### PluginSttEvent final
+
+```ts
+final?: string;
+```
+
+### PluginSttEvent error
+
+```ts
+error?: string;
+```
 
 ## PluginToolContext
 
